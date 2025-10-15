@@ -1,4 +1,14 @@
+# Backend
 __pycache__/
 *.pyc
-.env
+
+# Frontend
 node_modules/
+build/
+.env
+
+# OS / Editor junk
+.DS_Store
+*.log
+.vscode/
+.idea/
