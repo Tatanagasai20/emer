@@ -143,7 +143,7 @@ class AttendanceResponse(BaseModel):
     total_hours: Optional[float] = None
 
 class LeaveRequest(BaseModel):
-    leave_type: str  # sick, casual, earned
+    leave_type: str  # sick, casual, earned, wfh, maternity, paternity, emergency
     start_date: str
     end_date: str
     reason: str
@@ -886,6 +886,126 @@ async def delete_holiday(
         )
     
     return {"message": "Holiday deleted successfully"}
+
+# ==================== HR Attendance Management APIs ====================
+
+@app.post("/api/hr/attendance/mark")
+async def hr_mark_attendance(
+    employee_id: str,
+    action: str,  # check_in or check_out
+    current_user: dict = Depends(get_current_hr_admin)
+):
+    """Mark attendance for employee (HR Admin only)."""
+    if action not in ["check_in", "check_out"]:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid action. Must be 'check_in' or 'check_out'"
+        )
+    
+    # Verify employee exists
+    employee = users_collection.find_one({"employee_id": employee_id})
+    if not employee:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Employee not found"
+        )
+    
+    today = date.today().isoformat()
+    
+    if action == "check_in":
+        # Check if already checked in today
+        existing = attendance_collection.find_one({
+            "employee_id": employee_id,
+            "date": today
+        })
+        
+        if existing:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Employee already checked in today"
+            )
+        
+        # Create attendance record
+        attendance_data = {
+            "id": str(uuid.uuid4()),
+            "employee_id": employee_id,
+            "employee_name": employee["full_name"],
+            "check_in_time": datetime.now().isoformat(),
+            "check_out_time": None,
+            "check_in_photo_url": "hr_marked",
+            "check_out_photo_url": None,
+            "date": today,
+            "total_hours": None
+        }
+        
+        attendance_collection.insert_one(attendance_data)
+        return {"message": f"Check-in marked for {employee['full_name']}", "attendance": attendance_data}
+    
+    else:  # check_out
+        # Find today's attendance
+        attendance = attendance_collection.find_one({
+            "employee_id": employee_id,
+            "date": today
+        })
+        
+        if not attendance:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No check-in found for today"
+            )
+        
+        if attendance.get("check_out_time"):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Employee already checked out today"
+            )
+        
+        # Calculate total hours
+        check_in_time = datetime.fromisoformat(attendance["check_in_time"])
+        check_out_time = datetime.now()
+        total_hours = (check_out_time - check_in_time).total_seconds() / 3600
+        
+        # Update attendance
+        attendance_collection.update_one(
+            {"id": attendance["id"]},
+            {"$set": {
+                "check_out_time": check_out_time.isoformat(),
+                "check_out_photo_url": "hr_marked",
+                "total_hours": round(total_hours, 2)
+            }}
+        )
+        
+        return {"message": f"Check-out marked for {employee['full_name']}", "total_hours": round(total_hours, 2)}
+
+@app.get("/api/hr/attendance/employee-status")
+async def get_employee_attendance_status(
+    current_user: dict = Depends(get_current_hr_admin)
+):
+    """Get attendance status for all employees today (HR Admin only)."""
+    today = date.today().isoformat()
+    
+    # Get all active employees
+    employees = list(users_collection.find({"role": "employee", "is_active": True}))
+    
+    # Get today's attendance
+    attendance_records = list(attendance_collection.find({"date": today}))
+    attendance_map = {record["employee_id"]: record for record in attendance_records}
+    
+    employee_status = []
+    for emp in employees:
+        attendance = attendance_map.get(emp["employee_id"])
+        status = {
+            "employee_id": emp["employee_id"],
+            "employee_name": emp["full_name"],
+            "domain": emp.get("domain"),
+            "is_present": bool(attendance),
+            "check_in_time": attendance.get("check_in_time") if attendance else None,
+            "check_out_time": attendance.get("check_out_time") if attendance else None,
+            "total_hours": attendance.get("total_hours") if attendance else None
+        }
+        employee_status.append(status)
+    
+    return {"date": today, "employees": employee_status}
 
 # ==================== Dashboard Stats APIs ====================
 

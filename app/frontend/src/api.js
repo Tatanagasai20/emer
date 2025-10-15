@@ -90,4 +90,12 @@ export const dashboardAPI = {
   getStats: () => api.get('/api/dashboard/stats'),
 };
 
+// HR Management APIs
+export const hrAPI = {
+  markAttendance: (employeeId, action) => api.post('/api/hr/attendance/mark', null, {
+    params: { employee_id: employeeId, action }
+  }),
+  getEmployeeAttendanceStatus: () => api.get('/api/hr/attendance/employee-status'),
+};
+
 export default api;
